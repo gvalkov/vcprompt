@@ -25,11 +25,12 @@ VCS-specific formatting:
   --format-svn FORMAT        Subversion
 """
 
-from subprocess import call, Popen, PIPE
 import optparse
 import os
 import re
 import sys
+
+from subprocess import call, Popen, PIPE
 
 # deferred imports
 sqlite3 = None
@@ -752,4 +753,6 @@ def needs_parseString():
 
 
 if __name__ == '__main__':
-    print main()
+    prompt = main()
+    if prompt: print prompt
+    else: sys.exit(1)
