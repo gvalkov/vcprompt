@@ -240,87 +240,119 @@ def git(options):
     if not os.path.exists(file):
         return None
 
-    staged = branch = sha = modified = untracked = options.unknown
+    def revstring(ref, chars=7):
+        sha_file = os.path.join(file, ref)
+        if not os.path.exists(sha_file): return ''
+
+        try:
+            fh = open(sha_file, 'r')
+            for line in fh:
+                return line.strip()[0:chars]
+        except IOError:
+            pass
+        return ''
+
+    staged = branch = tracked_branch \
+    = sha = tracked_sha = modified \
+    = untracked \
+    = options.unknown
+
+    modified_count = untracked_count = staged_count = stashed_count = 0
 
     # the current branch is required to get the sha
     if re.search('%(b|r|h)', options.format):
         branch_file = os.path.join(file, 'HEAD')
         try:
-            f = None
-            try:
-                f = open(branch_file, 'r')
-                for line in f:
-                    line = line.strip()
-                    if re.match('^ref: refs/heads/', line):
-                        branch = (line.split('/')[-1] or options.unknown)
-                        break
-            except IOError:
-                pass
-        finally:
-            if f:
-                f.close()
+            fh = open(branch_file, 'r')
+            for line in fh:
+                line = line.strip()
+                if line.startswith('ref: refs/heads/'):
+                    branch = (line.split('/')[-1] or options.unknown)
+                    break
+        except IOError:
+            pass
 
         # sha/revision
         if re.search('%(r|h)', options.format) and branch != options.unknown:
-            sha_file = os.path.join(file, 'refs/heads/%s' % branch)
-            if os.path.exists(sha_file):
-                try:
-                    f = None
-                    try:
-                        f = open(sha_file, 'r')
-                        for line in f:
-                            sha = line.strip()[0:7]
-                            break
-                    except IOError:
-                        pass
-                finally:
-                    if f:
-                        f.close()
+            sha = revstring('refs/heads/%s' % branch)
 
     # modified
     if '%m' in options.format:
-        command = 'git diff --diff-filter=M --exit-code'
-        returncode = call(command, stdout=PIPE, stderr=PIPE, shell=True)
+        command = 'git diff --name-only --diff-filter=M --exit-code'
+        ret, out, err = call(command, stdout=PIPE, stderr=PIPE, shell=True)
 
-        if returncode == 1:
+        modified = ''
+
+        if ret == 1:
             modified = MODIFIED
-        else:
-            modified = ''
+            modified_count = wcl(out)
 
     # untracked files
     if '%u' in options.format:
-        command = 'git ls-files --other --exclude-standard'
-        process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
-        output = process.communicate()[0]
-        returncode = process.returncode
+        command = ('git', 'ls-files', '--other', '--exclude-standard')
+        ret, out, err = call(command, stdout=PIPE, stderr=PIPE)
 
-        if returncode == 0:
-            if output == '':
-                untracked = ''
-            else:
-                untracked = UNTRACKED
+        untracked = ''
+
+        if ret == 0 and out != '':
+            untracked = UNTRACKED
+            untracked_count = wcl(out)
 
     # staged files
     if '%a' in options.format:
-        command = 'git diff --name-only --cached'
-        process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
-        output = process.communicate()[0]
-        returncode = process.returncode
+        command = ('git', 'diff', '--name-only', '--cached')
+        ret, out, err = call(command, stdout=PIPE, stderr=PIPE)
 
-        if returncode == 0:
-            if output == '':
-                staged = ''
-            else:
-                staged = STAGED
+        staged = ''
+
+        if ret == 0 and out != '':
+            staged = STAGED
+            staged_count = wcl(out)
+
+    # tracked branch
+    if '%tb' in options.format:
+        command = ('git', 'for-each-ref', '--format=%(refname:short):%(upstream:short)', 'refs/heads/%s' % branch)
+        ret, out, err = call(command, stdout=PIPE, stderr=PIPE)
+
+        if ret == 0:
+            out = out.rstrip().split(':')
+            if len(out) == 2:
+                tracked_branch = out[1]
+
+    # tracked branch revision
+    if '%tr' in options.format:
+        tracked_sha = revstring('refs/remotes/%s' % tracked_branch)
+
+    # stashed changes count
+    if '%sc' in options.format:
+        command = ('git', 'stash', 'list')
+        ret, out, err = call(command, stdout=PIPE, stderr=PIPE)
+
+        if ret == 0 and out != '':
+            stashed_count = wcl(out)
+
 
     # formatting
     output = options.format
-    output = output.replace('%b', branch)
-    output = output.replace('%h', sha)
-    output = output.replace('%r', sha)
-    output = output.replace('%m', modified)
-    output = output.replace('%u', untracked)
-    output = output.replace('%a', staged)
+    output = output.replace('%tb', tracked_branch)
+    output = output.replace('%b',  branch)
+
+    output = output.replace('%th', tracked_sha)
+    output = output.replace('%h',  sha)
+    output = output.replace('%tr', tracked_sha)
+    output = output.replace('%r',  sha)
+
+    output = output.replace('%mc', str(modified_count))
+    output = output.replace('%m',  modified)
+
+    output = output.replace('%uc', str(untracked_count))
+    output = output.replace('%u',  untracked)
+
+    output = output.replace('%ac', str(staged_count))
+    output = output.replace('%a',  staged)
+
+    output = output.replace('%sc', str(stashed_count))
+
     output = output.replace('%s', 'git')
     output = output.replace('%n', 'git')
     return output
@@ -750,6 +782,18 @@ def needs_parseString():
     global parseString
     if not parseString:
         from xml.dom.minidom import parseString
+
+def call(*args, **kwargs):
+    process = Popen(*args, **kwargs)
+    stdout, stderr = process.communicate()
+    returncode = process.returncode
+
+    return returncode, stdout, stderr
+
+def wcl(text, chomp=True):
+    s = text.split(os.linesep)
+    if chomp: s = [s for s in s if s]
+    return len(s)
 
 
 if __name__ == '__main__':
