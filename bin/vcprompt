@@ -26,23 +26,35 @@ VCS-specific formatting:
 """
 
 from subprocess import call, Popen, PIPE
-from xml.dom.minidom import parseString
 import optparse
 import os
 import re
 import sys
 
-try:
-    import sqlite3
-    has_sqlite3 = True
-except ImportError:
+# Deferred imports
+sqlite3 = None
+parseString = None
+
+# utility functions
+def needs_sqlite3():
+    global sqlite3
+    if sqlite3: return
+
     try:
-        from pysqlite2 import dbapi2 as sqlite3
+        import sqlite3
     except ImportError:
-        has_sqlite3 = False
+        try:
+            from pysqlite2 import dbapi2 as sqlite3
+        except ImportError:
+            pass
+
+def needs_parseString():
+    global parseString
+    if not parseString:
+        from xml.dom.minidom import parseString
+
 
 __version__ = (0, 1, 5)
-
 
 # check to make sure the '--without-environment' flag is called first
 # this could be done in a callback, but we'd have to keep a note of every
@@ -329,6 +341,9 @@ def darcs(options):
 
     Distributed. Interactive. Smart.
     """
+
+    needs_parseString()
+
     file = os.path.join(options.path, '_darcs/hashed_inventory')
     if not os.path.exists(file):
         return None
@@ -391,6 +406,9 @@ def fossil(options):
 
     The Fossil version control system.
     """
+
+    needs_sqlite3()
+
     file = os.path.join(options.path, '_FOSSIL_')
     if not os.path.exists(file):
         return None
@@ -399,7 +417,7 @@ def fossil(options):
 
     # all this just to get the repository file :(
     repository = None
-    if has_sqlite3:
+    if sqlite3:
         try:
             conn = None
             try:
@@ -415,7 +433,7 @@ def fossil(options):
                 conn.close()
 
     # grab the sha from the repo
-    if repository is not None and has_sqlite3:
+    if repository is not None and sqlite3:
         try:
             conn = None
             try:
@@ -431,7 +449,7 @@ def fossil(options):
                 conn.close()
 
     # branch
-    if sha != options.unknown and has_sqlite3:
+    if sha != options.unknown and sqlite3:
         try:
             conn = None
             try:
@@ -731,7 +749,6 @@ def svn(options):
     output = output.replace('%s', 'svn')
     output = output.replace('%n', 'svn')
     return output
-
 
 if __name__ == '__main__':
     print main()
