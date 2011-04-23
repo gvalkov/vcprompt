@@ -31,28 +31,9 @@ import os
 import re
 import sys
 
-# Deferred imports
+# deferred imports
 sqlite3 = None
 parseString = None
-
-# utility functions
-def needs_sqlite3():
-    global sqlite3
-    if sqlite3: return
-
-    try:
-        import sqlite3
-    except ImportError:
-        try:
-            from pysqlite2 import dbapi2 as sqlite3
-        except ImportError:
-            pass
-
-def needs_parseString():
-    global parseString
-    if not parseString:
-        from xml.dom.minidom import parseString
-
 
 __version__ = (0, 1, 5)
 
@@ -244,6 +225,253 @@ def main():
     options, args = parser.parse_args()
     output = vcprompt(options)
 
+    return output
+
+
+@vcs
+def git(options):
+    """
+    Git
+
+    The fast version control system.
+    """
+    file = os.path.join(options.path, '.git/')
+    if not os.path.exists(file):
+        return None
+
+    staged = branch = sha = modified = untracked = options.unknown
+
+    # the current branch is required to get the sha
+    if re.search('%(b|r|h)', options.format):
+        branch_file = os.path.join(file, 'HEAD')
+        try:
+            f = None
+            try:
+                f = open(branch_file, 'r')
+                for line in f:
+                    line = line.strip()
+                    if re.match('^ref: refs/heads/', line):
+                        branch = (line.split('/')[-1] or options.unknown)
+                        break
+            except IOError:
+                pass
+        finally:
+            if f:
+                f.close()
+
+        # sha/revision
+        if re.search('%(r|h)', options.format) and branch != options.unknown:
+            sha_file = os.path.join(file, 'refs/heads/%s' % branch)
+            if os.path.exists(sha_file):
+                try:
+                    f = None
+                    try:
+                        f = open(sha_file, 'r')
+                        for line in f:
+                            sha = line.strip()[0:7]
+                            break
+                    except IOError:
+                        pass
+                finally:
+                    if f:
+                        f.close()
+
+    # modified
+    if '%m' in options.format:
+        command = 'git diff --diff-filter=M --exit-code'
+        returncode = call(command, stdout=PIPE, stderr=PIPE, shell=True)
+
+        if returncode == 1:
+            modified = MODIFIED
+        else:
+            modified = ''
+
+    # untracked files
+    if '%u' in options.format:
+        command = 'git ls-files --other --exclude-standard'
+        process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
+        output = process.communicate()[0]
+        returncode = process.returncode
+
+        if returncode == 0:
+            if output == '':
+                untracked = ''
+            else:
+                untracked = UNTRACKED
+
+    # staged files
+    if '%a' in options.format:
+        command = 'git diff --name-only --cached'
+        process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
+        output = process.communicate()[0]
+        returncode = process.returncode
+
+        if returncode == 0:
+            if output == '':
+                staged = ''
+            else:
+                staged = STAGED
+
+    # formatting
+    output = options.format
+    output = output.replace('%b', branch)
+    output = output.replace('%h', sha)
+    output = output.replace('%r', sha)
+    output = output.replace('%m', modified)
+    output = output.replace('%u', untracked)
+    output = output.replace('%a', staged)
+    output = output.replace('%s', 'git')
+    output = output.replace('%n', 'git')
+    return output
+
+
+@vcs
+def hg(options):
+    """
+    Mercurial
+
+    The Mercurial version control system.
+    """
+    file = os.path.join(options.path, '.hg')
+    if not os.path.isdir(file):
+        return None
+
+    branch = revision = sha = modified = untracked = options.unknown
+
+    # changeset ID or global sha
+    if re.search('%(r|h)', options.format):
+        try:
+            f = None
+            try:
+                f = open(os.path.join(file, 'tags.cache'), 'r')
+                for line in f:
+                    revision, sha = line.strip().split()
+                    sha = sha[:7]
+                    break
+            except IOError:
+                pass
+        finally:
+            if f:
+                f.close()
+
+    # branch
+    if '%b' in options.format:
+        file = os.path.join(options.path, '.hg/undo.branch')
+        try:
+            f = None
+            try:
+                f = open(file, 'r')
+                for line in f:
+                    branch = line.strip()
+                    break
+            except IOError:
+                pass
+        finally:
+            if f:
+                f.close()
+
+    # modified
+    if '%m' in options.format:
+        command = 'hg status --modified'
+        process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
+        output = process.communicate()[0].strip()
+        returncode = process.returncode
+
+        if returncode == 0:
+            if output == '':
+                modified = ''
+            else:
+                modified = MODIFIED
+
+    # untracked
+    if '%u' in options.format:
+        command = 'hg status --unknown'
+        process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
+        output = process.communicate()[0]
+        returncode = process.returncode
+
+        if output == '':
+            untracked = ''
+        else:
+            untracked = UNTRACKED
+
+    output = options.format
+    output = output.replace('%b', branch)
+    output = output.replace('%h', sha)
+    output = output.replace('%r', revision)
+    output = output.replace('%m', modified)
+    output = output.replace('%u', untracked)
+    output = output.replace('%s', 'hg')
+    output = output.replace('%n', 'hg')
+    return output
+
+
+@vcs
+def svn(options):
+    """
+    Subversion
+
+    The Subversion version control system.
+    """
+    file = os.path.join(options.path, '.svn/entries')
+    if not os.path.exists(file):
+        return None
+
+    branch = revision = modified = untracked = options.unknown
+
+    # branch
+    command = 'svn info %s' % options.path
+    process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
+    output = process.communicate()[0]
+    returncode = process.returncode
+
+    if returncode == 0:
+        # compile some regexes
+        branch_regex = re.compile('((tags|branches)|trunk)')
+        revision_regex = re.compile('^Revision: (?P<revision>\d+)')
+
+        for line in output.split('\n'):
+            # branch
+            if '%b' in options.format:
+                if re.match('URL:', line):
+                    matches = re.search(branch_regex, line)
+                    if matches:
+                        branch = matches.groups(0)[0]
+
+            # revision/sha
+            if re.search('%(r|h)', options.format):
+                if re.match('Revision:', line):
+                    matches = re.search(revision_regex, line)
+                    if 'revision' in matches.groupdict():
+                        revision = matches.group('revision')
+
+    # modified
+    if re.search('%[mu]', options.format):
+        command = 'svn status'
+        process = Popen(command, shell=True, stdout=PIPE)
+        output = process.communicate()[0]
+        returncode = process.returncode
+
+        if returncode == 0:
+            if not output:
+                modified = ''
+                untracked = ''
+            else:
+                codes = [line[0] for line in output.split('\n') if line]
+                if 'M' in codes:
+                    modified = MODIFIED
+                if '?' in codes:
+                    untracked = UNTRACKED
+
+    # formatting
+    output = options.format
+    output = output.replace('%r', revision)
+    output = output.replace('%h', revision)
+    output = output.replace('%b', branch)
+    output = output.replace('%m', modified)
+    output = output.replace('%u', untracked)
+    output = output.replace('%s', 'svn')
+    output = output.replace('%n', 'svn')
     return output
 
 
@@ -504,251 +732,24 @@ def fossil(options):
     return output
 
 
-@vcs
-def git(options):
-    """
-    Git
+# utility functions
+def needs_sqlite3():
+    global sqlite3
+    if sqlite3: return
 
-    The fast version control system.
-    """
-    file = os.path.join(options.path, '.git/')
-    if not os.path.exists(file):
-        return None
-
-    staged = branch = sha = modified = untracked = options.unknown
-
-    # the current branch is required to get the sha
-    if re.search('%(b|r|h)', options.format):
-        branch_file = os.path.join(file, 'HEAD')
+    try:
+        import sqlite3
+    except ImportError:
         try:
-            f = None
-            try:
-                f = open(branch_file, 'r')
-                for line in f:
-                    line = line.strip()
-                    if re.match('^ref: refs/heads/', line):
-                        branch = (line.split('/')[-1] or options.unknown)
-                        break
-            except IOError:
-                pass
-        finally:
-            if f:
-                f.close()
+            from pysqlite2 import dbapi2 as sqlite3
+        except ImportError:
+            pass
 
-        # sha/revision
-        if re.search('%(r|h)', options.format) and branch != options.unknown:
-            sha_file = os.path.join(file, 'refs/heads/%s' % branch)
-            if os.path.exists(sha_file):
-                try:
-                    f = None
-                    try:
-                        f = open(sha_file, 'r')
-                        for line in f:
-                            sha = line.strip()[0:7]
-                            break
-                    except IOError:
-                        pass
-                finally:
-                    if f:
-                        f.close()
+def needs_parseString():
+    global parseString
+    if not parseString:
+        from xml.dom.minidom import parseString
 
-    # modified
-    if '%m' in options.format:
-        command = 'git diff --diff-filter=M --exit-code'
-        returncode = call(command, stdout=PIPE, stderr=PIPE, shell=True)
-
-        if returncode == 1:
-            modified = MODIFIED
-        else:
-            modified = ''
-
-    # untracked files
-    if '%u' in options.format:
-        command = 'git ls-files --other --exclude-standard'
-        process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
-        output = process.communicate()[0]
-        returncode = process.returncode
-
-        if returncode == 0:
-            if output == '':
-                untracked = ''
-            else:
-                untracked = UNTRACKED
-
-    # staged files
-    if '%a' in options.format:
-        command = 'git diff --name-only --cached'
-        process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
-        output = process.communicate()[0]
-        returncode = process.returncode
-
-        if returncode == 0:
-            if output == '':
-                staged = ''
-            else:
-                staged = STAGED
-
-    # formatting
-    output = options.format
-    output = output.replace('%b', branch)
-    output = output.replace('%h', sha)
-    output = output.replace('%r', sha)
-    output = output.replace('%m', modified)
-    output = output.replace('%u', untracked)
-    output = output.replace('%a', staged)
-    output = output.replace('%s', 'git')
-    output = output.replace('%n', 'git')
-    return output
-
-
-@vcs
-def hg(options):
-    """
-    Mercurial
-
-    The Mercurial version control system.
-    """
-    file = os.path.join(options.path, '.hg')
-    if not os.path.isdir(file):
-        return None
-
-    branch = revision = sha = modified = untracked = options.unknown
-
-    # changeset ID or global sha
-    if re.search('%(r|h)', options.format):
-        try:
-            f = None
-            try:
-                f = open(os.path.join(file, 'tags.cache'), 'r')
-                for line in f:
-                    revision, sha = line.strip().split()
-                    sha = sha[:7]
-                    break
-            except IOError:
-                pass
-        finally:
-            if f:
-                f.close()
-
-    # branch
-    if '%b' in options.format:
-        file = os.path.join(options.path, '.hg/undo.branch')
-        try:
-            f = None
-            try:
-                f = open(file, 'r')
-                for line in f:
-                    branch = line.strip()
-                    break
-            except IOError:
-                pass
-        finally:
-            if f:
-                f.close()
-
-    # modified
-    if '%m' in options.format:
-        command = 'hg status --modified'
-        process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
-        output = process.communicate()[0].strip()
-        returncode = process.returncode
-
-        if returncode == 0:
-            if output == '':
-                modified = ''
-            else:
-                modified = MODIFIED
-
-    # untracked
-    if '%u' in options.format:
-        command = 'hg status --unknown'
-        process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
-        output = process.communicate()[0]
-        returncode = process.returncode
-
-        if output == '':
-            untracked = ''
-        else:
-            untracked = UNTRACKED
-
-    output = options.format
-    output = output.replace('%b', branch)
-    output = output.replace('%h', sha)
-    output = output.replace('%r', revision)
-    output = output.replace('%m', modified)
-    output = output.replace('%u', untracked)
-    output = output.replace('%s', 'hg')
-    output = output.replace('%n', 'hg')
-    return output
-
-
-@vcs
-def svn(options):
-    """
-    Subversion
-
-    The Subversion version control system.
-    """
-    file = os.path.join(options.path, '.svn/entries')
-    if not os.path.exists(file):
-        return None
-
-    branch = revision = modified = untracked = options.unknown
-
-    # branch
-    command = 'svn info %s' % options.path
-    process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
-    output = process.communicate()[0]
-    returncode = process.returncode
-
-    if returncode == 0:
-        # compile some regexes
-        branch_regex = re.compile('((tags|branches)|trunk)')
-        revision_regex = re.compile('^Revision: (?P<revision>\d+)')
-
-        for line in output.split('\n'):
-            # branch
-            if '%b' in options.format:
-                if re.match('URL:', line):
-                    matches = re.search(branch_regex, line)
-                    if matches:
-                        branch = matches.groups(0)[0]
-
-            # revision/sha
-            if re.search('%(r|h)', options.format):
-                if re.match('Revision:', line):
-                    matches = re.search(revision_regex, line)
-                    if 'revision' in matches.groupdict():
-                        revision = matches.group('revision')
-
-    # modified
-    if re.search('%[mu]', options.format):
-        command = 'svn status'
-        process = Popen(command, shell=True, stdout=PIPE)
-        output = process.communicate()[0]
-        returncode = process.returncode
-
-        if returncode == 0:
-            if not output:
-                modified = ''
-                untracked = ''
-            else:
-                codes = [line[0] for line in output.split('\n') if line]
-                if 'M' in codes:
-                    modified = MODIFIED
-                if '?' in codes:
-                    untracked = UNTRACKED
-
-    # formatting
-    output = options.format
-    output = output.replace('%r', revision)
-    output = output.replace('%h', revision)
-    output = output.replace('%b', branch)
-    output = output.replace('%m', modified)
-    output = output.replace('%u', untracked)
-    output = output.replace('%s', 'svn')
-    output = output.replace('%n', 'svn')
-    return output
 
 if __name__ == '__main__':
     print main()
