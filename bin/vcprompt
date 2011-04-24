@@ -422,34 +422,22 @@ def hg(options):
     # changeset ID or global sha
     if 'r' in ph or 'h' in ph:
         try:
-            f = None
-            try:
-                f = open(os.path.join(file, 'tags.cache'), 'r')
-                for line in f:
-                    revision, sha = line.strip().split()
-                    sha = sha[:7]
-                    break
-            except IOError:
-                pass
-        finally:
-            if f:
-                f.close()
+            fh = open(os.path.join(file, 'tags.cache'), 'r')
+            line = fh.readline()
+            revision, sha = line.strip().split()
+            sha = sha[:7]
+        except IOError:
+            pass
 
     # branch
     if 'b' in ph:
         file = os.path.join(options.path, '.hg/undo.branch')
         try:
-            f = None
-            try:
-                f = open(file, 'r')
-                for line in f:
-                    branch = line.strip()
-                    break
-            except IOError:
-                pass
-        finally:
-            if f:
-                f.close()
+            fh = open(file, 'r')
+            line = fh.readline()
+            branch = line.strip()
+        except IOError:
+            pass
 
     # modified
     if 'm' in ph:
@@ -576,23 +564,18 @@ def bzr(options):
     # local revision or global sha
     if 'r' in ph or 'h' in ph:
         try:
-            f = None
-            try:
-                f = open(file, 'r')
-                for line in f:
-                    line = line.strip()
-                    revision, sha = line.split(' ', 1)
-                    # compensate for empty Bazaar repositories
-                    if sha == 'null:':
-                        sha = unknown
-                    else:
-                        sha = sha.rsplit('-', 1)[-1][:7]
-                        break
-            except IOError:
-                pass
-        finally:
-            if f:
-                f.close()
+            fh = open(file, 'r')
+            for line in fh:
+                line = line.strip()
+                revision, sha = line.split(' ', 1)
+                # compensate for empty Bazaar repositories
+                if sha == 'null:':
+                    sha = unknown
+                else:
+                    sha = sha.rsplit('-', 1)[-1][:7]
+                    break
+        except IOError:
+            pass
 
     # status (modified/untracked)
     if 'm' in ph or 'u' in ph:
