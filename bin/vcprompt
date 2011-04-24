@@ -75,6 +75,7 @@ placeholders = {
     's'  : ('repository type',      (common_ph_name,)),
     'b'  : ('branch',               (common_ph_name,)),
     'r'  : ('revision',             (common_ph_name,)),
+    'h'  : ('revision',             (common_ph_name,)),
     'm'  : ('modified flag',        (common_ph_name,)),
     'mc' : ('modified file count',  (common_ph_name,)),
     'u'  : ('untracked flag',       (common_ph_name,)),
@@ -257,6 +258,16 @@ def main():
 
 
     options, args = parser.parse_args()
+
+    # create a dictionary of all format placeholders
+    #ph_re = re.compile('%%(%s)' %  '|'.join(placeholders.keys()))
+    #options.format_placeholders = set(ph_re.findall(options.format))
+
+    _ph = {} ; _o = options.format
+    for k in placeholders.iterkeys():
+        if k in _o: _ph[k] = None
+
+    options.format_placeholders = _ph
     output = vcprompt(options)
 
     return output
@@ -285,6 +296,8 @@ def git(options):
             pass
         return ''
 
+    ph = options.format_placeholders
+
     staged = branch = tracked_branch \
     = sha = tracked_sha = modified \
     = untracked \
@@ -293,7 +306,7 @@ def git(options):
     modified_count = untracked_count = staged_count = stashed_count = 0
 
     # the current branch is required to get the sha
-    if re.search('%(b|r|h)', options.format):
+    if 'b' in ph or 'r' in ph or 'h' in ph:
         branch_file = os.path.join(file, 'HEAD')
         try:
             fh = open(branch_file, 'r')
@@ -306,11 +319,11 @@ def git(options):
             pass
 
         # sha/revision
-        if re.search('%(r|h)', options.format) and branch != options.unknown:
+        if ('r' in ph or 'h' in ph) and branch != options.unknown:
             sha = revstring('refs/heads/%s' % branch)
 
     # modified
-    if '%m' in options.format:
+    if 'm' in ph:
         command = 'git diff --name-only --diff-filter=M --exit-code'
         ret, out, err = call(command, stdout=PIPE, stderr=PIPE, shell=True)
 
@@ -321,7 +334,7 @@ def git(options):
             modified_count = wcl(out)
 
     # untracked files
-    if '%u' in options.format:
+    if 'u' in ph:
         command = ('git', 'ls-files', '--other', '--exclude-standard')
         ret, out, err = call(command, stdout=PIPE, stderr=PIPE)
 
@@ -332,7 +345,7 @@ def git(options):
             untracked_count = wcl(out)
 
     # staged files
-    if '%a' in options.format:
+    if 'a' in ph:
         command = ('git', 'diff', '--name-only', '--cached')
         ret, out, err = call(command, stdout=PIPE, stderr=PIPE)
 
@@ -343,7 +356,7 @@ def git(options):
             staged_count = wcl(out)
 
     # tracked branch
-    if '%tb' in options.format:
+    if 'tb' in ph and branch != options.unknown:
         command = ('git', 'for-each-ref', '--format=%(refname:short):%(upstream:short)', 'refs/heads/%s' % branch)
         ret, out, err = call(command, stdout=PIPE, stderr=PIPE)
 
@@ -353,11 +366,11 @@ def git(options):
                 tracked_branch = out[1]
 
     # tracked branch revision
-    if '%tr' in options.format:
+    if 'tr' in ph and tracked_branch != options.unknown:
         tracked_sha = revstring('refs/remotes/%s' % tracked_branch)
 
     # stashed changes count
-    if '%sc' in options.format:
+    if 'sc' in ph:
         command = ('git', 'stash', 'list')
         ret, out, err = call(command, stdout=PIPE, stderr=PIPE)
 
@@ -402,10 +415,12 @@ def hg(options):
     if not os.path.isdir(file):
         return None
 
+    ph = options.format_placeholders
+
     branch = revision = sha = modified = untracked = options.unknown
 
     # changeset ID or global sha
-    if re.search('%(r|h)', options.format):
+    if 'r' in ph or 'h' in ph:
         try:
             f = None
             try:
@@ -421,7 +436,7 @@ def hg(options):
                 f.close()
 
     # branch
-    if '%b' in options.format:
+    if 'b' in ph:
         file = os.path.join(options.path, '.hg/undo.branch')
         try:
             f = None
@@ -437,7 +452,7 @@ def hg(options):
                 f.close()
 
     # modified
-    if '%m' in options.format:
+    if 'm' in ph:
         command = 'hg status --modified'
         process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
         output = process.communicate()[0].strip()
@@ -450,7 +465,7 @@ def hg(options):
                 modified = MODIFIED
 
     # untracked
-    if '%u' in options.format:
+    if 'u' in ph:
         command = 'hg status --unknown'
         process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
         output = process.communicate()[0]
@@ -483,6 +498,8 @@ def svn(options):
     if not os.path.exists(file):
         return None
 
+    ph = options.format_placeholders
+
     branch = revision = modified = untracked = options.unknown
 
     # branch
@@ -498,21 +515,21 @@ def svn(options):
 
         for line in output.split('\n'):
             # branch
-            if '%b' in options.format:
+            if 'b' in ph:
                 if re.match('URL:', line):
                     matches = re.search(branch_regex, line)
                     if matches:
                         branch = matches.groups(0)[0]
 
             # revision/sha
-            if re.search('%(r|h)', options.format):
+            if 'r' in ph or 'h' in ph:
                 if re.match('Revision:', line):
                     matches = re.search(revision_regex, line)
                     if 'revision' in matches.groupdict():
                         revision = matches.group('revision')
 
     # modified
-    if re.search('%[mu]', options.format):
+    if 'm' in ph or 'u' in ph:
         command = 'svn status'
         process = Popen(command, shell=True, stdout=PIPE)
         output = process.communicate()[0]
@@ -552,10 +569,12 @@ def bzr(options):
     if not os.path.exists(file):
         return None
 
+    ph = options.format_placeholders
+
     branch = revision = sha = modified = untracked = options.unknown
 
     # local revision or global sha
-    if re.search('%(r|h)', options.format):
+    if 'r' in ph or 'h' in ph:
         try:
             f = None
             try:
@@ -576,7 +595,7 @@ def bzr(options):
                 f.close()
 
     # status (modified/untracked)
-    if re.search('%[mu]', options.format):
+    if 'm' in ph or 'u' in ph:
         command = 'bzr status --short'
         process = Popen(command.split(), stdout=PIPE)
         output = process.communicate()[0].strip()
@@ -642,10 +661,12 @@ def darcs(options):
     if not os.path.exists(file):
         return None
 
+    ph = options.format_placeholders
+
     branch = sha = modified = untracked = options.unknown
 
     # sha
-    if re.search('%(h|r)', options.format):
+    if 'h' in ph or 'r' in ph:
         command = 'darcs changes --last 1 --xml'
         process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
         output = process.communicate()[0]
@@ -663,7 +684,7 @@ def darcs(options):
     branch = os.path.basename(options.path)
 
     # modified
-    if re.search('%[mu]', options.format):
+    if 'm' in ph or 'u' in ph:
         command = 'darcs whatsnew -l -s'
         process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
         output = process.communicate()[0]
@@ -706,6 +727,8 @@ def fossil(options):
     file = os.path.join(options.path, '_FOSSIL_')
     if not os.path.exists(file):
         return None
+
+    ph = options.format_placeholders
 
     branch = sha = modified = untracked = options.unknown
 
@@ -761,7 +784,7 @@ def fossil(options):
                 conn.close()
 
     # modified
-    if '%m' in options.format:
+    if 'm' in ph:
         command = 'fossil changes'
         process = Popen(command.split(), stdout=PIPE)
         output = process.communicate()[0]
@@ -774,7 +797,7 @@ def fossil(options):
                 modified = ''
 
     # untracked files
-    if '%u' in options.format:
+    if 'u' in options.format:
         command = 'fossil extras'
         process = Popen(command.split(), stdout=PIPE)
         output = process.communicate()[0]
