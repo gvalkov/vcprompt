@@ -72,18 +72,19 @@ UNTRACKED = '?'
 common_ph_name = 'Common'
 
 placeholders = {
-    's'  : ('repository type',      (common_ph_name,)),
-    'b'  : ('branch',               (common_ph_name,)),
-    'r'  : ('revision',             (common_ph_name,)),
-    'h'  : ('revision',             (common_ph_name,)),
-    'm'  : ('modified flag',        (common_ph_name,)),
-    'mc' : ('modified file count',  (common_ph_name,)),
-    'u'  : ('untracked flag',       (common_ph_name,)),
-    'uc' : ('untracked file count', (common_ph_name,)),
-    'a'  : ('staged flag',          ('Git',)),
-    'ac' : ('staged file count',    ('Git',)),
-    'sc' : ('stash count',          ('Git',)),
-    'tb' : ('tracked branch',       ('Git', 'Hg')),
+    's'  : ('repository type',       (common_ph_name,)),
+    'b'  : ('branch',                (common_ph_name,)),
+    'r'  : ('revision',              (common_ph_name,)),
+    'h'  : ('revision',              (common_ph_name,)),
+    'l'  : ('last changed revision', ('Svn',)),
+    'm'  : ('modified flag',         (common_ph_name,)),
+    'mc' : ('modified file count',   (common_ph_name,)),
+    'u'  : ('untracked flag',        (common_ph_name,)),
+    'uc' : ('untracked file count',  (common_ph_name,)),
+    'a'  : ('staged flag',           ('Git',)),
+    'ac' : ('staged file count',     ('Git',)),
+    'sc' : ('stash count',           ('Git',)),
+    'tb' : ('tracked branch',        ('Git', 'Hg')),
     'tr' : ('revision of tracked branch', ('Git', 'Hg')),
 }
 
@@ -275,11 +276,8 @@ def main():
 
 @vcs
 def git(options):
-    """
-    Git
+    ' Git - the fast version control system '
 
-    The fast version control system.
-    """
     file = os.path.join(options.path, '.git/')
     if not os.path.exists(file):
         return None
@@ -406,11 +404,8 @@ def git(options):
 
 @vcs
 def hg(options):
-    """
-    Mercurial
+    'Mercurial - the fast, easy to use, revision control tool'
 
-    The Mercurial version control system.
-    """
     file = os.path.join(options.path, '.hg')
     if not os.path.isdir(file):
         return None
@@ -477,70 +472,77 @@ def hg(options):
 
 @vcs
 def svn(options):
-    """
-    Subversion
+    'The Subversion version control system'
 
-    The Subversion version control system.
-    """
     file = os.path.join(options.path, '.svn/entries')
     if not os.path.exists(file):
         return None
 
     ph = options.format_placeholders
 
-    branch = revision = modified = untracked = options.unknown
+    branch = revision = last_changed_rev = modified = untracked = options.unknown
+    modified_count = untracked_count = 0
 
     # branch
-    command = 'svn info %s' % options.path
-    process = Popen(command.split(), stdout=PIPE, stderr=PIPE)
-    output = process.communicate()[0]
-    returncode = process.returncode
+    command = ('svn', '--non-interactive', 'info', options.path)
+    ret, out, err = call(command, stdout=PIPE, stderr=PIPE)
 
-    if returncode == 0:
-        # compile some regexes
-        branch_regex = re.compile('((tags|branches)|trunk)')
-        revision_regex = re.compile('^Revision: (?P<revision>\d+)')
+    def findBranch(line):
+        s = line.split('/')
+        if 'trunk' in s: return 'trunk'
 
-        for line in output.split('\n'):
-            # branch
-            if 'b' in ph:
-                if re.match('URL:', line):
-                    matches = re.search(branch_regex, line)
-                    if matches:
-                        branch = matches.groups(0)[0]
+        try:
+            i = s.index('branches')
+            return s[i+1]
+            i = s.index('tags')
+            return s[i+1]
+        except ValueError:
+            return options.unknown
 
-            # revision/sha
-            if 'r' in ph or 'h' in ph:
-                if re.match('Revision:', line):
-                    matches = re.search(revision_regex, line)
-                    if 'revision' in matches.groupdict():
-                        revision = matches.group('revision')
+    if ret == 0:
+        svninfo = [i.split(': ') for i in out.splitlines() if i]
+        svninfo = dict(svninfo)
+
+        if 'b' in ph:
+            branch = findBranch(svninfo['URL'])
+
+        if 'r' in ph or 'h' in ph:
+            revision = svninfo['Revision']
+
+        if 'l' in ph:
+            last_changed_rev = svninfo['Last Changed Rev']
+
 
     # modified
     if 'm' in ph or 'u' in ph:
-        command = 'svn status'
-        process = Popen(command, shell=True, stdout=PIPE)
-        output = process.communicate()[0]
-        returncode = process.returncode
+        command = ('svn', '--non-interactive', 'status')
+        ret, out, err = call(command, stdout=PIPE, stderr=PIPE)
 
-        if returncode == 0:
-            if not output:
-                modified = ''
-                untracked = ''
-            else:
-                codes = [line[0] for line in output.split('\n') if line]
-                if 'M' in codes:
-                    modified = MODIFIED
-                if '?' in codes:
-                    untracked = UNTRACKED
+        if ret == 0:
+            modified, untracked = '', ''
+
+            for line in out.splitlines():
+                if line.startswith('M'):
+                    modified_count += 1
+                if line.startswith('?'):
+                    untracked_count += 1
+
+        if modified_count  > 0: modified  = MODIFIED
+        if untracked_count > 0: untracked = UNTRACKED
 
     # formatting
     output = options.format
     output = output.replace('%r', revision)
+    output = output.replace('%l', last_changed_rev)
     output = output.replace('%h', revision)
     output = output.replace('%b', branch)
-    output = output.replace('%m', modified)
-    output = output.replace('%u', untracked)
+
+    output = output.replace('%mc', str(modified_count))
+    output = output.replace('%m',  modified)
+
+    output = output.replace('%uc', str(untracked_count))
+    output = output.replace('%u',  untracked)
+
     output = output.replace('%s', 'svn')
     output = output.replace('%n', 'svn')
     return output
@@ -548,11 +550,8 @@ def svn(options):
 
 @vcs
 def bzr(options):
-    """
-    Bazaar
+    'The Bazaar version control system'
 
-    The Bazaar version control system
-    """
     file = os.path.join(options.path, '.bzr/branch/last-revision')
     if not os.path.exists(file):
         return None
@@ -610,11 +609,8 @@ def bzr(options):
 
 @vcs
 def cvs(options):
-    """
-    CVS
+    'CVS - Concurrent Versions System'
 
-    Concurrent Versions System.
-    """
     file = os.path.join(options.path, 'CVS/')
     if not os.path.exists(file):
         return None
@@ -632,11 +628,7 @@ def cvs(options):
 
 @vcs
 def darcs(options):
-    """
-    Darcs
-
-    Distributed. Interactive. Smart.
-    """
+    'Darcs - Distributed. Interactive. Smart'
 
     needs_parseString()
 
